@@ -1,18 +1,28 @@
 const STORAGE_KEY = "pothole-reporter-records";
 
 const reportForm = document.getElementById("reportForm");
-const imageFileInput = document.getElementById("imageFile");
-const imageNameInput = document.getElementById("imageName");
+const cameraFeed = document.getElementById("cameraFeed");
+const imagePrefixInput = document.getElementById("imagePrefix");
 const detectionClassInput = document.getElementById("detectionClass");
+const captureIntervalInput = document.getElementById("captureInterval");
 const latitudeInput = document.getElementById("latitude");
 const longitudeInput = document.getElementById("longitude");
 const useLocationBtn = document.getElementById("useLocation");
+const startCameraBtn = document.getElementById("startCamera");
+const stopCameraBtn = document.getElementById("stopCamera");
+const captureNowBtn = document.getElementById("captureNow");
+const startAutoCaptureBtn = document.getElementById("startAutoCapture");
+const stopAutoCaptureBtn = document.getElementById("stopAutoCapture");
+const statusText = document.getElementById("statusText");
 const previewBox = document.getElementById("previewBox");
 const rowsEl = document.getElementById("rows");
 const clearAllBtn = document.getElementById("clearAll");
 const downloadCsvBtn = document.getElementById("downloadCsv");
 
-let selectedImageDataUrl = "";
+let stream = null;
+let autoCaptureTimer = null;
+let captureSequence = 1;
+let latestCoords = null;
 
 function getRecords() {
   try {
@@ -26,142 +36,246 @@ function setRecords(records) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
 
+function updateStatus(text) {
+  statusText.textContent = `Status: ${text}`;
+}
+
+function safe(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function toImageBlob(dataUrl) {
+  const [meta, payload] = dataUrl.split(",");
+  const mime = meta.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
+  const bytes = atob(payload);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i += 1) {
+    arr[i] = bytes.charCodeAt(i);
+  }
+  return new Blob([arr], { type: mime });
+}
+
+function triggerDownload(dataUrl, filename) {
+  const blob = toImageBlob(dataUrl);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function render() {
   const records = getRecords();
 
   if (!records.length) {
-    rowsEl.innerHTML = "<tr><td colspan='6'>No reports yet.</td></tr>";
+    rowsEl.innerHTML = "<tr><td colspan='7'>No captures yet.</td></tr>";
     return;
   }
 
   rowsEl.innerHTML = records
     .map((r) => {
+      const filename = safe(r.imageName);
       return `<tr>
-        <td>${r.timestamp}</td>
-        <td>${r.imageDataUrl ? `<img class="thumb" src="${r.imageDataUrl}" alt="${r.imageName}" />` : "-"}</td>
-        <td>${r.imageName}</td>
-        <td>${r.detectionClass}</td>
-        <td>${r.latitude}</td>
-        <td>${r.longitude}</td>
+        <td>${safe(r.timestamp)}</td>
+        <td>${r.imageDataUrl ? `<img class="thumb" src="${r.imageDataUrl}" alt="${filename}" />` : "-"}</td>
+        <td>${filename}</td>
+        <td>${safe(r.detectionClass)}</td>
+        <td>${safe(r.latitude)}</td>
+        <td>${safe(r.longitude)}</td>
+        <td>${r.imageDataUrl ? `<a class="save-link" href="${r.imageDataUrl}" download="${filename}">Save</a>` : "-"}</td>
       </tr>`;
     })
     .join("");
 }
 
-function setPreview(imageDataUrl) {
-  if (!imageDataUrl) {
-    previewBox.innerHTML = "<p>No image selected yet.</p>";
+function setPreview(dataUrl) {
+  if (!dataUrl) {
+    previewBox.innerHTML = "<p>No image captured yet.</p>";
     return;
   }
-  previewBox.innerHTML = `<img class="preview-image" src="${imageDataUrl}" alt="Selected preview" />`;
+  previewBox.innerHTML = `<img class="preview-image" src="${dataUrl}" alt="Latest capture" />`;
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(new Error("Failed to read image"));
-    reader.readAsDataURL(file);
-  });
+function fileSafeTimestamp(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
-async function compressImage(file) {
-  const dataUrl = await readFileAsDataUrl(file);
-  const image = new Image();
-  image.src = dataUrl;
-
-  await new Promise((resolve, reject) => {
-    image.onload = resolve;
-    image.onerror = () => reject(new Error("Invalid image"));
-  });
-
-  const maxSide = 1280;
-  let { width, height } = image;
-  if (Math.max(width, height) > maxSide) {
-    const ratio = maxSide / Math.max(width, height);
-    width = Math.round(width * ratio);
-    height = Math.round(height * ratio);
+async function refreshLocation() {
+  if (!navigator.geolocation) {
+    throw new Error("Geolocation is not available on this browser.");
   }
 
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        latestCoords = {
+          latitude: Number(position.coords.latitude.toFixed(6)),
+          longitude: Number(position.coords.longitude.toFixed(6)),
+        };
+        latitudeInput.value = String(latestCoords.latitude);
+        longitudeInput.value = String(latestCoords.longitude);
+        resolve(latestCoords);
+      },
+      () => reject(new Error("Could not fetch GPS. Allow location permission.")),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+}
+
+async function startCamera() {
+  if (stream) return;
+  if (!navigator.mediaDevices?.getUserMedia) {
+    alert("Camera API is not supported in this browser.");
+    return;
+  }
+
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: { ideal: "environment" } },
+    audio: false,
+  });
+  cameraFeed.srcObject = stream;
+  await cameraFeed.play();
+  updateStatus("camera ready");
+}
+
+function stopCamera() {
+  if (!stream) return;
+  stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  cameraFeed.srcObject = null;
+  updateStatus("camera stopped");
+}
+
+function captureFrameDataUrl() {
+  if (!stream || !cameraFeed.videoWidth) {
+    throw new Error("Open camera first.");
+  }
+
+  const width = cameraFeed.videoWidth;
+  const height = cameraFeed.videoHeight;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return dataUrl;
-
-  ctx.drawImage(image, 0, 0, width, height);
-  return canvas.toDataURL("image/jpeg", 0.78);
+  if (!ctx) {
+    throw new Error("Canvas not available.");
+  }
+  ctx.drawImage(cameraFeed, 0, 0, width, height);
+  return canvas.toDataURL("image/jpeg", 0.82);
 }
 
-imageFileInput.addEventListener("change", async () => {
-  const file = imageFileInput.files?.[0];
-  if (!file) {
-    selectedImageDataUrl = "";
-    setPreview("");
-    return;
+async function captureAndStore() {
+  if (!stream) {
+    await startCamera();
   }
 
-  try {
-    selectedImageDataUrl = await compressImage(file);
-    setPreview(selectedImageDataUrl);
-
-    if (!imageNameInput.value.trim()) {
-      imageNameInput.value = file.name || `capture_${Date.now()}.jpg`;
-    }
-  } catch {
-    selectedImageDataUrl = "";
-    setPreview("");
-    alert("Could not process this image. Please try again.");
+  if (!latestCoords) {
+    await refreshLocation();
   }
-});
 
-reportForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-
-  if (!selectedImageDataUrl) {
-    alert("Please capture or select an image first.");
-    return;
-  }
+  const dataUrl = captureFrameDataUrl();
+  const now = new Date();
+  const imagePrefix = imagePrefixInput.value.trim() || "pothole";
+  const imageName = `${imagePrefix}_${fileSafeTimestamp(now)}_${captureSequence}.jpg`;
+  captureSequence += 1;
 
   const record = {
-    timestamp: new Date().toLocaleString(),
-    imageName: imageNameInput.value.trim(),
+    timestamp: now.toLocaleString(),
+    imageName,
     detectionClass: detectionClassInput.value,
-    latitude: Number(latitudeInput.value),
-    longitude: Number(longitudeInput.value),
-    imageDataUrl: selectedImageDataUrl,
+    latitude: latestCoords.latitude,
+    longitude: latestCoords.longitude,
+    imageDataUrl: dataUrl,
   };
 
   const records = getRecords();
   records.unshift(record);
   setRecords(records);
-  reportForm.reset();
-  selectedImageDataUrl = "";
-  setPreview("");
+  setPreview(dataUrl);
   render();
+  updateStatus(`captured ${imageName}`);
+}
+
+function startAutoCapture() {
+  if (autoCaptureTimer) return;
+
+  const seconds = Number(captureIntervalInput.value || 5);
+  const ms = Math.max(1, seconds) * 1000;
+  updateStatus(`auto capture running every ${seconds}s`);
+
+  captureAndStore().catch((err) => {
+    updateStatus(err.message);
+  });
+
+  autoCaptureTimer = setInterval(() => {
+    captureAndStore().catch((err) => {
+      updateStatus(err.message);
+      stopAutoCapture();
+    });
+  }, ms);
+}
+
+function stopAutoCapture() {
+  if (!autoCaptureTimer) return;
+  clearInterval(autoCaptureTimer);
+  autoCaptureTimer = null;
+  updateStatus("auto capture stopped");
+}
+
+reportForm.addEventListener("submit", (event) => {
+  event.preventDefault();
 });
 
-useLocationBtn.addEventListener("click", async () => {
-  if (!navigator.geolocation) {
-    alert("Geolocation is not available in this browser.");
-    return;
-  }
+startCameraBtn.addEventListener("click", () => {
+  startCamera().catch((err) => {
+    updateStatus(err.message);
+    alert(err.message);
+  });
+});
 
-  navigator.geolocation.getCurrentPosition(
-    (position) => {
-      latitudeInput.value = position.coords.latitude.toFixed(6);
-      longitudeInput.value = position.coords.longitude.toFixed(6);
-    },
-    () => {
-      alert("Could not fetch location. Please allow permission.");
-    }
-  );
+stopCameraBtn.addEventListener("click", () => {
+  stopAutoCapture();
+  stopCamera();
+});
+
+captureNowBtn.addEventListener("click", () => {
+  captureAndStore().catch((err) => {
+    updateStatus(err.message);
+    alert(err.message);
+  });
+});
+
+startAutoCaptureBtn.addEventListener("click", () => {
+  startAutoCapture();
+});
+
+stopAutoCaptureBtn.addEventListener("click", () => {
+  stopAutoCapture();
+});
+
+useLocationBtn.addEventListener("click", () => {
+  refreshLocation()
+    .then(() => updateStatus("gps updated"))
+    .catch((err) => {
+      updateStatus(err.message);
+      alert(err.message);
+    });
 });
 
 clearAllBtn.addEventListener("click", () => {
-  if (!confirm("Delete all saved reports?")) return;
+  if (!confirm("Delete all saved captures?")) return;
   setRecords([]);
+  setPreview("");
   render();
+  updateStatus("all captures removed");
 });
 
 function toCsv(records) {
@@ -198,5 +312,22 @@ downloadCsvBtn.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
+rowsEl.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLAnchorElement)) return;
+
+  // On some mobile browsers, the download attribute is ignored.
+  // Keep default behavior so user can long-press and save image manually.
+  if (target.classList.contains("save-link")) {
+    updateStatus("saving image to device");
+  }
+});
+
+window.addEventListener("beforeunload", () => {
+  stopAutoCapture();
+  stopCamera();
+});
+
 render();
 setPreview("");
+updateStatus("idle");
