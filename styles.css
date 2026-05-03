@@ -22,7 +22,7 @@ body {
 
 .app-shell {
   width: min(1000px, 94vw);
-  margin: 24px auto;
+  margin: 14px auto 24px;
   display: grid;
   gap: 16px;
 }
@@ -49,6 +49,26 @@ p {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
+}
+
+.camera-panel {
+  display: grid;
+  gap: 10px;
+}
+
+#cameraFeed {
+  width: 100%;
+  max-height: 360px;
+  background: #0b1224;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+.camera-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .full-width {
@@ -78,6 +98,12 @@ button {
   border-color: var(--accent);
 }
 
+button.ghost {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
 button:hover {
   filter: brightness(0.95);
 }
@@ -91,7 +117,7 @@ button.danger {
   border: 1px dashed var(--line);
   border-radius: 12px;
   padding: 10px;
-  min-height: 96px;
+  min-height: 120px;
   display: grid;
   place-items: center;
   color: var(--muted);
@@ -117,6 +143,31 @@ button.danger {
   border-radius: 6px;
   border: 1px solid var(--line);
   display: block;
+}
+
+.save-link {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #bfdbfe;
+  text-decoration: none;
+  color: #1e40af;
+  background: #eff6ff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status-wrap {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+#statusText {
+  margin: 0;
+  color: #1e293b;
+  font-size: 14px;
 }
 
 .toolbar {
@@ -153,6 +204,25 @@ th {
 }
 
 @media (max-width: 640px) {
+  .app-shell {
+    width: min(1000px, 96vw);
+    margin-top: 10px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .camera-actions {
+    grid-template-columns: 1fr;
+  }
+
+  input,
+  select,
+  button {
+    min-height: 44px;
+  }
+
   .toolbar {
     flex-direction: column;
     align-items: flex-start;
