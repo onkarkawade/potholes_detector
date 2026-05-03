@@ -17,11 +17,13 @@
 
         <form id="reportForm" class="form-grid">
           <div class="full-width camera-panel">
-            <video id="cameraFeed" playsinline autoplay muted></video>
+            <video id="cameraFeed" playsinline autoplay muted style="display:none;"></video>
+            <input type="file" id="cameraCapture" accept="image/*" capture="environment" style="display:none;" />
             <div class="camera-actions">
-              <button type="button" id="startCamera">Open Camera</button>
-              <button type="button" id="stopCamera" class="ghost">Stop Camera</button>
-              <button type="button" id="captureNow">Capture Now</button>
+              <button type="button" id="captureBtn" class="primary-action">📷 Capture Photo</button>
+              <button type="button" id="startCamera" style="display:none;">Open Camera (Desktop)</button>
+              <button type="button" id="stopCamera" class="ghost" style="display:none;">Stop Camera</button>
+              <button type="button" id="captureNow" style="display:none;">Capture Now</button>
             </div>
           </div>
 
