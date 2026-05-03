@@ -1,7 +1,10 @@
 const STORAGE_KEY = "pothole-reporter-records";
 
+// DOM elements
 const reportForm = document.getElementById("reportForm");
 const cameraFeed = document.getElementById("cameraFeed");
+const cameraCapture = document.getElementById("cameraCapture");
+const captureBtn = document.getElementById("captureBtn");
 const imagePrefixInput = document.getElementById("imagePrefix");
 const detectionClassInput = document.getElementById("detectionClass");
 const captureIntervalInput = document.getElementById("captureInterval");
@@ -19,10 +22,12 @@ const rowsEl = document.getElementById("rows");
 const clearAllBtn = document.getElementById("clearAll");
 const downloadCsvBtn = document.getElementById("downloadCsv");
 
+// State
 let stream = null;
 let autoCaptureTimer = null;
 let captureSequence = 1;
 let latestCoords = null;
+let isMobile = /iPhone|iPad|iPod|Android|Mobile/.test(navigator.userAgent);
 
 function getRecords() {
   try {
@@ -130,6 +135,12 @@ async function refreshLocation() {
   });
 }
 
+// Mobile: Use file input capture
+function openMobileCamera() {
+  cameraCapture.click();
+}
+
+// Desktop: Use getUserMedia
 async function startCamera() {
   if (stream) return;
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -137,13 +148,18 @@ async function startCamera() {
     return;
   }
 
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: { ideal: "environment" } },
-    audio: false,
-  });
-  cameraFeed.srcObject = stream;
-  await cameraFeed.play();
-  updateStatus("camera ready");
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    cameraFeed.srcObject = stream;
+    cameraFeed.style.display = "block";
+    await cameraFeed.play();
+    updateStatus("camera ready");
+  } catch (error) {
+    throw error;
+  }
 }
 
 function stopCamera() {
@@ -151,6 +167,7 @@ function stopCamera() {
   stream.getTracks().forEach((t) => t.stop());
   stream = null;
   cameraFeed.srcObject = null;
+  cameraFeed.style.display = "none";
   updateStatus("camera stopped");
 }
 
@@ -172,36 +189,95 @@ function captureFrameDataUrl() {
   return canvas.toDataURL("image/jpeg", 0.82);
 }
 
+// Handle mobile file capture
+async function handleMobileCapture(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  try {
+    // Ensure GPS is set
+    if (!latestCoords) {
+      await refreshLocation();
+    }
+
+    // Read image file
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const dataUrl = e.target?.result;
+      if (!dataUrl) return;
+
+      const now = new Date();
+      const imagePrefix = imagePrefixInput.value.trim() || "pothole";
+      const imageName = `${imagePrefix}_${fileSafeTimestamp(now)}_${captureSequence}.jpg`;
+      captureSequence += 1;
+
+      const record = {
+        timestamp: now.toLocaleString(),
+        imageName,
+        detectionClass: detectionClassInput.value,
+        latitude: latestCoords.latitude,
+        longitude: latestCoords.longitude,
+        imageDataUrl: dataUrl,
+      };
+
+      const records = getRecords();
+      records.unshift(record);
+      setRecords(records);
+      setPreview(dataUrl);
+      render();
+      updateStatus(`captured ${imageName}`);
+    };
+    reader.readAsDataURL(file);
+
+    // Reset input so same file can be selected again
+    cameraCapture.value = "";
+  } catch (error) {
+    updateStatus(error.message);
+    alert(error.message);
+  }
+}
+
 async function captureAndStore() {
-  if (!stream) {
-    await startCamera();
+  try {
+    if (!latestCoords) {
+      await refreshLocation();
+    }
+
+    if (isMobile) {
+      // Mobile: trigger file picker (user will select image from camera)
+      openMobileCamera();
+    } else {
+      // Desktop: capture from video stream
+      if (!stream) {
+        await startCamera();
+      }
+
+      const dataUrl = captureFrameDataUrl();
+      const now = new Date();
+      const imagePrefix = imagePrefixInput.value.trim() || "pothole";
+      const imageName = `${imagePrefix}_${fileSafeTimestamp(now)}_${captureSequence}.jpg`;
+      captureSequence += 1;
+
+      const record = {
+        timestamp: now.toLocaleString(),
+        imageName,
+        detectionClass: detectionClassInput.value,
+        latitude: latestCoords.latitude,
+        longitude: latestCoords.longitude,
+        imageDataUrl: dataUrl,
+      };
+
+      const records = getRecords();
+      records.unshift(record);
+      setRecords(records);
+      setPreview(dataUrl);
+      render();
+      updateStatus(`captured ${imageName}`);
+    }
+  } catch (error) {
+    updateStatus(error.message);
+    throw error;
   }
-
-  if (!latestCoords) {
-    await refreshLocation();
-  }
-
-  const dataUrl = captureFrameDataUrl();
-  const now = new Date();
-  const imagePrefix = imagePrefixInput.value.trim() || "pothole";
-  const imageName = `${imagePrefix}_${fileSafeTimestamp(now)}_${captureSequence}.jpg`;
-  captureSequence += 1;
-
-  const record = {
-    timestamp: now.toLocaleString(),
-    imageName,
-    detectionClass: detectionClassInput.value,
-    latitude: latestCoords.latitude,
-    longitude: latestCoords.longitude,
-    imageDataUrl: dataUrl,
-  };
-
-  const records = getRecords();
-  records.unshift(record);
-  setRecords(records);
-  setPreview(dataUrl);
-  render();
-  updateStatus(`captured ${imageName}`);
 }
 
 function startAutoCapture() {
@@ -234,6 +310,30 @@ reportForm.addEventListener("submit", (event) => {
   event.preventDefault();
 });
 
+// Mobile: Capture button
+captureBtn.addEventListener("click", () => {
+  if (isMobile) {
+    captureAndStore().catch((err) => {
+      updateStatus(err.message);
+    });
+  } else {
+    // Desktop: show traditional camera UI
+    startCameraBtn.style.display = "inline-block";
+    stopCameraBtn.style.display = "inline-block";
+    captureNowBtn.style.display = "inline-block";
+    captureBtn.style.display = "none";
+    
+    startCamera().catch((err) => {
+      updateStatus(err.message);
+      alert(err.message);
+    });
+  }
+});
+
+// Mobile: File input change
+cameraCapture.addEventListener("change", handleMobileCapture);
+
+// Desktop: Camera controls
 startCameraBtn.addEventListener("click", () => {
   startCamera().catch((err) => {
     updateStatus(err.message);
@@ -328,6 +428,25 @@ window.addEventListener("beforeunload", () => {
   stopCamera();
 });
 
+// Initialize UI based on device type
+if (isMobile) {
+  // Mobile: Show capture button only
+  captureBtn.style.display = "block";
+  startCameraBtn.style.display = "none";
+  stopCameraBtn.style.display = "none";
+  captureNowBtn.style.display = "none";
+  startAutoCaptureBtn.style.display = "none";
+  
+  // Pre-fetch GPS on load
+  refreshLocation().catch(() => {
+    updateStatus("GPS: tap 'Refresh GPS' button to enable");
+  });
+} else {
+  // Desktop: Show traditional controls
+  captureBtn.style.display = "none";
+  startCameraBtn.style.display = "inline-block";
+}
+
 render();
 setPreview("");
-updateStatus("idle");
+updateStatus("ready");
