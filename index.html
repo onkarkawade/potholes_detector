@@ -13,21 +13,21 @@
     <main class="app-shell">
       <section class="card">
         <h1>Pothole Reporter Lite</h1>
-        <p class="sub">Capture metadata quickly and export as CSV.</p>
+        <p class="sub">Mobile camera capture with interval shooting, GPS tagging, and local save.</p>
 
         <form id="reportForm" class="form-grid">
-          <label class="full-width">
-            Capture image
-            <input id="imageFile" type="file" accept="image/*" capture="environment" required />
-          </label>
-
-          <div id="previewBox" class="preview-box full-width">
-            <p>No image selected yet.</p>
+          <div class="full-width camera-panel">
+            <video id="cameraFeed" playsinline autoplay muted></video>
+            <div class="camera-actions">
+              <button type="button" id="startCamera">Open Camera</button>
+              <button type="button" id="stopCamera" class="ghost">Stop Camera</button>
+              <button type="button" id="captureNow">Capture Now</button>
+            </div>
           </div>
 
           <label>
-            Image name
-            <input id="imageName" type="text" placeholder="road_001.jpg" required />
+            Image prefix
+            <input id="imagePrefix" type="text" value="pothole" required />
           </label>
 
           <label>
@@ -42,17 +42,35 @@
           </label>
 
           <label>
+            Interval
+            <select id="captureInterval">
+              <option value="3">Every 3 seconds</option>
+              <option value="5" selected>Every 5 seconds</option>
+              <option value="10">Every 10 seconds</option>
+            </select>
+          </label>
+
+          <label>
             Latitude
-            <input id="latitude" type="number" step="any" placeholder="12.9716" required />
+            <input id="latitude" type="number" step="any" placeholder="12.9716" readonly required />
           </label>
 
           <label>
             Longitude
-            <input id="longitude" type="number" step="any" placeholder="77.5946" required />
+            <input id="longitude" type="number" step="any" placeholder="77.5946" readonly required />
           </label>
 
-          <button type="button" id="useLocation">Use my location</button>
-          <button type="submit">Save report</button>
+          <button type="button" id="useLocation">Refresh GPS</button>
+          <button type="button" id="startAutoCapture">Start Auto Capture</button>
+          <button type="button" id="stopAutoCapture" class="danger">Stop Auto Capture</button>
+
+          <div class="full-width status-wrap">
+            <p id="statusText">Status: idle</p>
+          </div>
+
+          <div id="previewBox" class="preview-box full-width">
+            <p>No image captured yet.</p>
+          </div>
         </form>
       </section>
 
@@ -71,10 +89,11 @@
               <tr>
                 <th>Time</th>
                 <th>Photo</th>
-                <th>Image</th>
+                <th>Name</th>
                 <th>Class</th>
                 <th>Latitude</th>
                 <th>Longitude</th>
+                <th>Save</th>
               </tr>
             </thead>
             <tbody id="rows"></tbody>
